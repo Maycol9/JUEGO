@@ -663,7 +663,7 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-2xl font-bold md:text-3xl">Aventura Romántica</h1>
-              <p className="text-sm text-white/70">Un juego bonito para tu novia, hecho con amor y estilo.</p>
+              <p className="text-sm text-white/70">Este juego es echo para ti mi amor .</p>
             </div>
           </div>
 
