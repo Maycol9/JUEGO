@@ -10,10 +10,9 @@ import {
   RotateCcw,
   Sparkles,
   Star,
-  Trophy,
 } from "lucide-react";
 
-const TILE_SIZE = 56;
+const MAX_TILE_SIZE = 56;
 const WIN_MESSAGE = "¡Felicidades, ganaste mi amor! 💖";
 
 const LEVELS = [
@@ -121,9 +120,47 @@ export default function App() {
   const [overlay, setOverlay] = useState(null);
   const [gameFinished, setGameFinished] = useState(false);
   const touchStartRef = useRef(null);
+  const boardWrapperRef = useRef(null);
+  const [boardViewportWidth, setBoardViewportWidth] = useState(0);
 
   const currentLevel = LEVELS[levelIndex];
   const parsed = useMemo(() => parseLevel(currentLevel), [currentLevel]);
+
+  useEffect(() => {
+    const updateBoardWidth = () => {
+      if (!boardWrapperRef.current) return;
+      setBoardViewportWidth(boardWrapperRef.current.clientWidth || 0);
+    };
+
+    updateBoardWidth();
+
+    if (typeof ResizeObserver !== "undefined" && boardWrapperRef.current) {
+      const resizeObserver = new ResizeObserver(() => updateBoardWidth());
+      resizeObserver.observe(boardWrapperRef.current);
+      window.addEventListener("resize", updateBoardWidth);
+
+      return () => {
+        resizeObserver.disconnect();
+        window.removeEventListener("resize", updateBoardWidth);
+      };
+    }
+
+    window.addEventListener("resize", updateBoardWidth);
+    return () => window.removeEventListener("resize", updateBoardWidth);
+  }, []);
+
+  const boardGap = useMemo(() => (boardViewportWidth > 0 && boardViewportWidth < 420 ? 6 : 8), [boardViewportWidth]);
+
+  const tileSize = useMemo(() => {
+    const safeViewport = Math.max(boardViewportWidth - 4, 250);
+    const computed = Math.floor((safeViewport - boardGap * (parsed.width - 1)) / parsed.width);
+    return Math.max(36, Math.min(MAX_TILE_SIZE, computed || MAX_TILE_SIZE));
+  }, [boardGap, boardViewportWidth, parsed.width]);
+
+  const boardWidth = useMemo(
+    () => parsed.width * tileSize + boardGap * (parsed.width - 1),
+    [boardGap, parsed.width, tileSize]
+  );
 
   const resetLevelState = useCallback(
     (keepLives = true) => {
@@ -259,8 +296,7 @@ export default function App() {
           const nextY = enemy.y + dy;
 
           if (isWall(nextX, nextY)) {
-            const reversedDir = enemy.dir * -1;
-            return { ...enemy, dir: reversedDir };
+            return { ...enemy, dir: enemy.dir * -1 };
           }
 
           return { ...enemy, x: nextX, y: nextY };
@@ -335,16 +371,22 @@ export default function App() {
   };
 
   const renderCell = (x, y) => {
-    const baseClass = "relative flex items-center justify-center rounded-2xl border transition-all duration-300";
     const isPlayer = player.x === x && player.y === y;
     const isExit = parsed.exit.x === x && parsed.exit.y === y;
     const isEnemy = enemies.some((enemy) => enemy.x === x && enemy.y === y);
     const gem = remainingGems.find((item) => item.x === x && item.y === y);
     const wall = parsed.grid[y][x] === "#";
 
-    let style = {
-      width: TILE_SIZE,
-      height: TILE_SIZE,
+    const radius = Math.max(14, Math.round(tileSize * 0.28));
+    const inset = Math.max(5, Math.round(tileSize * 0.14));
+    const shellSize = Math.max(28, tileSize - 12);
+    const pieceEmojiSize = Math.max(18, Math.round(tileSize * 0.42));
+    const wallDot = Math.max(12, Math.round(tileSize * 0.24));
+
+    const style = {
+      width: tileSize,
+      height: tileSize,
+      borderRadius: radius,
     };
 
     if (wall) {
@@ -352,9 +394,12 @@ export default function App() {
         <div
           key={cellKey(x, y)}
           style={style}
-          className={`${baseClass} border-white/10 bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900 shadow-inner`}
+          className="relative flex items-center justify-center border border-white/10 bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900 shadow-inner"
         >
-          <div className="h-6 w-6 rounded-full bg-white/10" />
+          <div
+            className="rounded-full bg-white/10"
+            style={{ width: wallDot, height: wallDot }}
+          />
         </div>
       );
     }
@@ -363,17 +408,22 @@ export default function App() {
       <div
         key={cellKey(x, y)}
         style={style}
-        className={`${baseClass} border-white/10 bg-gradient-to-br from-emerald-200/60 via-white/60 to-pink-200/60 backdrop-blur-sm shadow-sm`}
+        className="relative flex items-center justify-center border border-white/10 bg-gradient-to-br from-emerald-200/60 via-white/60 to-pink-200/60 backdrop-blur-sm shadow-sm"
       >
         {isExit && (
           <motion.div
             animate={{ scale: remainingGems.length === 0 ? [1, 1.08, 1] : 1 }}
             transition={{ repeat: Infinity, duration: 1.4 }}
-            className={`absolute inset-2 rounded-2xl border ${
+            className={`absolute flex items-center justify-center border text-xl ${
               remainingGems.length === 0
                 ? "border-yellow-400 bg-yellow-200/80"
                 : "border-white/40 bg-white/30"
-            } flex items-center justify-center text-xl`}
+            }`}
+            style={{
+              inset,
+              borderRadius: Math.max(12, radius - 4),
+              fontSize: pieceEmojiSize,
+            }}
           >
             {remainingGems.length === 0 ? "🚪" : "🔒"}
           </motion.div>
@@ -383,7 +433,8 @@ export default function App() {
           <motion.div
             animate={{ y: [0, -4, 0], rotate: [0, 6, -6, 0] }}
             transition={{ repeat: Infinity, duration: 1.8 }}
-            className="absolute text-2xl"
+            className="absolute"
+            style={{ fontSize: pieceEmojiSize }}
           >
             💎
           </motion.div>
@@ -393,7 +444,13 @@ export default function App() {
           <motion.div
             animate={{ scale: [1, 1.06, 1], opacity: [0.9, 1, 0.9] }}
             transition={{ repeat: Infinity, duration: 1.2 }}
-            className="absolute flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-rose-900 to-slate-900 text-xl shadow-lg"
+            className="absolute flex items-center justify-center bg-gradient-to-br from-rose-900 to-slate-900 shadow-lg"
+            style={{
+              width: shellSize,
+              height: shellSize,
+              borderRadius: Math.max(14, Math.round(shellSize / 2)),
+              fontSize: pieceEmojiSize,
+            }}
           >
             👾
           </motion.div>
@@ -403,7 +460,13 @@ export default function App() {
           <motion.div
             layout
             transition={{ type: "spring", stiffness: 300, damping: 20 }}
-            className="absolute flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-fuchsia-400 via-pink-400 to-rose-500 text-xl shadow-xl"
+            className="absolute flex items-center justify-center bg-gradient-to-br from-fuchsia-400 via-pink-400 to-rose-500 shadow-xl"
+            style={{
+              width: shellSize,
+              height: shellSize,
+              borderRadius: Math.max(14, Math.round(shellSize / 2)),
+              fontSize: pieceEmojiSize,
+            }}
           >
             🧚‍♀️
           </motion.div>
@@ -413,12 +476,186 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.18),_transparent_35%),linear-gradient(135deg,#2d1b69_0%,#111827_45%,#4c1d95_100%)] p-4 text-white md:p-8">
-      <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[360px_1fr]">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.18),_transparent_35%),linear-gradient(135deg,#2d1b69_0%,#111827_45%,#4c1d95_100%)] p-3 pb-[max(16px,env(safe-area-inset-bottom))] text-white sm:p-4 md:p-8">
+      <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[360px_1fr] lg:gap-6">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="order-1 relative overflow-hidden rounded-[28px] border border-white/10 bg-white/10 p-3 shadow-2xl backdrop-blur-xl sm:p-4 md:p-6 lg:order-2"
+        >
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-3xl border border-white/10 bg-black/20 p-3 sm:p-4">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-fuchsia-200/80 sm:text-xs">Modo aventura</p>
+              <p className="mt-1 text-xl font-semibold sm:text-2xl">Lleva a la heroína hasta la salida</p>
+            </div>
+            <div className="rounded-2xl bg-yellow-400/15 px-3 py-2 text-sm font-semibold text-yellow-200 sm:px-4">
+              Nivel {levelIndex + 1} / {LEVELS.length}
+            </div>
+          </div>
+
+          <div
+            ref={boardWrapperRef}
+            className="relative overflow-hidden rounded-[28px] border border-white/10 bg-black/20 p-2 sm:p-3 md:p-4"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+            style={{ touchAction: "none" }}
+          >
+            <div
+              className="relative mx-auto grid"
+              style={{
+                width: boardWidth,
+                maxWidth: "100%",
+                gap: boardGap,
+                gridTemplateColumns: `repeat(${parsed.width}, minmax(0, 1fr))`,
+              }}
+            >
+              {Array.from({ length: parsed.height }).flatMap((_, y) =>
+                Array.from({ length: parsed.width }).map((__, x) => renderCell(x, y))
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-3xl border border-white/10 bg-black/20 p-4 md:hidden">
+            <p className="mb-3 text-center text-sm font-medium text-white/80">Controles táctiles</p>
+            <div className="mx-auto grid w-full max-w-[220px] grid-cols-3 gap-3">
+              <div />
+              <button
+                onClick={() => movePlayer(0, -1)}
+                className="rounded-2xl bg-white/10 p-4 active:scale-95"
+              >
+                <ArrowUp className="mx-auto h-6 w-6" />
+              </button>
+              <div />
+              <button
+                onClick={() => movePlayer(-1, 0)}
+                className="rounded-2xl bg-white/10 p-4 active:scale-95"
+              >
+                <ArrowLeft className="mx-auto h-6 w-6" />
+              </button>
+              <button
+                onClick={() => movePlayer(0, 1)}
+                className="rounded-2xl bg-white/10 p-4 active:scale-95"
+              >
+                <ArrowDown className="mx-auto h-6 w-6" />
+              </button>
+              <button
+                onClick={() => movePlayer(1, 0)}
+                className="rounded-2xl bg-white/10 p-4 active:scale-95"
+              >
+                <ArrowRight className="mx-auto h-6 w-6" />
+              </button>
+            </div>
+            <p className="mt-3 text-center text-xs text-white/60">
+              También puede deslizar el dedo sobre el tablero para moverse.
+            </p>
+          </div>
+
+          <AnimatePresence>
+            {!started && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-md sm:p-6"
+              >
+                <div className="max-w-xl rounded-[32px] border border-white/10 bg-white/10 p-6 text-center shadow-2xl backdrop-blur-xl sm:p-8">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-pink-500/20 text-3xl sm:h-20 sm:w-20 sm:text-4xl">
+                    🌸
+                  </div>
+                  <h2 className="text-2xl font-bold sm:text-3xl">Un juego hecho para ella</h2>
+                  <p className="mt-4 text-sm leading-7 text-white/75 sm:text-base">
+                    Explora, recoge diamantes y supera los niveles. Cada victoria mostrará un mensaje especial:
+                  </p>
+                  <p className="mt-4 rounded-2xl bg-pink-500/15 px-4 py-3 text-base font-semibold text-pink-100 sm:text-lg">
+                    {WIN_MESSAGE}
+                  </p>
+                  <button
+                    onClick={startGame}
+                    className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
+                  >
+                    <Play className="h-5 w-5" /> Comenzar aventura
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {overlay && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-md sm:p-6"
+              >
+                <motion.div
+                  initial={{ scale: 0.9, y: 20 }}
+                  animate={{ scale: 1, y: 0 }}
+                  exit={{ scale: 0.95, opacity: 0 }}
+                  className="max-w-xl rounded-[32px] border border-white/10 bg-white/10 p-6 text-center shadow-2xl backdrop-blur-xl sm:p-8"
+                >
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-yellow-400/20 text-3xl sm:h-20 sm:w-20 sm:text-4xl">
+                    {overlay.type === "gameover" ? "💔" : overlay.type === "final" ? "👑" : "🏆"}
+                  </div>
+                  <h3 className="text-2xl font-bold sm:text-3xl">{overlay.title}</h3>
+                  <p className="mt-4 text-sm leading-7 text-white/75 sm:text-base">{overlay.subtitle}</p>
+
+                  {overlay.type !== "gameover" && (
+                    <div className="mt-5 rounded-3xl border border-pink-300/20 bg-pink-400/10 p-4">
+                      <p className="text-base font-medium text-pink-100 sm:text-lg">Tu premio especial:</p>
+                      <p className="mt-2 text-xl font-bold text-white sm:text-2xl">{WIN_MESSAGE}</p>
+                    </div>
+                  )}
+
+                  <div className="mt-6 flex flex-wrap justify-center gap-3">
+                    {overlay.type === "win" && (
+                      <button
+                        onClick={nextLevel}
+                        className="rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
+                      >
+                        Siguiente nivel
+                      </button>
+                    )}
+
+                    {(overlay.type === "final" || overlay.type === "gameover") && (
+                      <button
+                        onClick={restartGame}
+                        className="rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
+                      >
+                        Volver a jugar
+                      </button>
+                    )}
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {gameFinished && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="pointer-events-none absolute inset-0 overflow-hidden"
+            >
+              {Array.from({ length: 18 }).map((_, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ y: -40, x: `${(i * 7) % 100}%`, opacity: 0 }}
+                  animate={{ y: "110%", opacity: [0, 1, 1, 0] }}
+                  transition={{ duration: 4 + (i % 3), repeat: Infinity, delay: i * 0.12 }}
+                  className="absolute text-2xl"
+                >
+                  {i % 2 === 0 ? "💖" : "✨"}
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
+        </motion.div>
+
         <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
-          className="rounded-[28px] border border-white/10 bg-white/10 p-6 shadow-2xl backdrop-blur-xl"
+          className="order-2 rounded-[28px] border border-white/10 bg-white/10 p-4 shadow-2xl backdrop-blur-xl sm:p-6 lg:order-1"
         >
           <div className="mb-6 flex items-center gap-3">
             <div className="rounded-2xl bg-pink-400/20 p-3">
@@ -426,7 +663,7 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-2xl font-bold md:text-3xl">Aventura Romántica</h1>
-              <p className="text-sm text-white/70">Un juego echo para ti mi amor.</p>
+              <p className="text-sm text-white/70">Un juego bonito para tu novia, hecho con amor y estilo.</p>
             </div>
           </div>
 
@@ -468,7 +705,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+            <div className="hidden rounded-3xl border border-white/10 bg-black/20 p-4 md:block">
               <p className="mb-3 text-sm font-medium text-white/80">Controles</p>
               <div className="grid grid-cols-3 gap-2 text-center text-xs">
                 <div />
@@ -505,177 +742,6 @@ export default function App() {
               </button>
             </div>
           </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="relative overflow-hidden rounded-[32px] border border-white/10 bg-white/10 p-4 shadow-2xl backdrop-blur-xl md:p-6"
-        >
-          <div className="mb-4 flex items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/20 p-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-fuchsia-200/80">Modo aventura</p>
-              <p className="mt-1 text-lg font-semibold">Lleva a la heroína hasta la salida</p>
-            </div>
-            <div className="rounded-2xl bg-yellow-400/15 px-4 py-2 text-sm font-semibold text-yellow-200">
-              Nivel {levelIndex + 1} / {LEVELS.length}
-            </div>
-          </div>
-
-          <div
-            className="relative overflow-auto rounded-[28px] border border-white/10 bg-black/20 p-4"
-            onTouchStart={handleTouchStart}
-            onTouchEnd={handleTouchEnd}
-            style={{ touchAction: "none" }}
-          >
-            <div
-              className="relative mx-auto grid gap-2"
-              style={{
-                width: parsed.width * (TILE_SIZE + 8) - 8,
-                gridTemplateColumns: `repeat(${parsed.width}, minmax(0, 1fr))`,
-              }}
-            >
-              {Array.from({ length: parsed.height }).flatMap((_, y) =>
-                Array.from({ length: parsed.width }).map((__, x) => renderCell(x, y))
-              )}
-            </div>
-          </div>
-
-          <AnimatePresence>
-            {!started && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="absolute inset-0 flex items-center justify-center bg-slate-950/70 p-6 backdrop-blur-md"
-              >
-                <div className="max-w-xl rounded-[32px] border border-white/10 bg-white/10 p-8 text-center shadow-2xl backdrop-blur-xl">
-                  <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-pink-500/20 text-4xl">
-                    🌸
-                  </div>
-                  <h2 className="text-3xl font-bold">Un juego hecho para ella</h2>
-                  <p className="mt-4 text-base leading-7 text-white/75">
-                    Explora, recoge diamantes y supera los niveles. Cada victoria mostrará un mensaje especial:
-                  </p>
-                  <p className="mt-4 rounded-2xl bg-pink-500/15 px-4 py-3 text-lg font-semibold text-pink-100">
-                    {WIN_MESSAGE}
-                  </p>
-                  <button
-                    onClick={startGame}
-                    className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
-                  >
-                    <Play className="h-5 w-5" /> Comenzar aventura
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
-            {overlay && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="absolute inset-0 flex items-center justify-center bg-slate-950/70 p-6 backdrop-blur-md"
-              >
-                <motion.div
-                  initial={{ scale: 0.9, y: 20 }}
-                  animate={{ scale: 1, y: 0 }}
-                  exit={{ scale: 0.95, opacity: 0 }}
-                  className="max-w-xl rounded-[32px] border border-white/10 bg-white/10 p-8 text-center shadow-2xl backdrop-blur-xl"
-                >
-                  <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-yellow-400/20 text-4xl">
-                    {overlay.type === "gameover" ? "💔" : overlay.type === "final" ? "👑" : "🏆"}
-                  </div>
-                  <h3 className="text-3xl font-bold">{overlay.title}</h3>
-                  <p className="mt-4 text-base leading-7 text-white/75">{overlay.subtitle}</p>
-
-                  {overlay.type !== "gameover" && (
-                    <div className="mt-5 rounded-3xl border border-pink-300/20 bg-pink-400/10 p-4">
-                      <p className="text-lg font-medium text-pink-100">Tu premio especial:</p>
-                      <p className="mt-2 text-2xl font-bold text-white">{WIN_MESSAGE}</p>
-                    </div>
-                  )}
-
-                  <div className="mt-6 flex flex-wrap justify-center gap-3">
-                    {overlay.type === "win" && (
-                      <button
-                        onClick={nextLevel}
-                        className="rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
-                      >
-                        Siguiente nivel
-                      </button>
-                    )}
-
-                    {(overlay.type === "final" || overlay.type === "gameover") && (
-                      <button
-                        onClick={restartGame}
-                        className="rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
-                      >
-                        Volver a jugar
-                      </button>
-                    )}
-                  </div>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className="mt-4 rounded-3xl border border-white/10 bg-black/20 p-4 md:hidden">
-            <p className="mb-3 text-center text-sm font-medium text-white/80">Controles táctiles</p>
-            <div className="mx-auto grid w-full max-w-[220px] grid-cols-3 gap-3">
-              <div />
-              <button
-                onClick={() => movePlayer(0, -1)}
-                className="rounded-2xl bg-white/10 p-4 active:scale-95"
-              >
-                <ArrowUp className="mx-auto h-6 w-6" />
-              </button>
-              <div />
-              <button
-                onClick={() => movePlayer(-1, 0)}
-                className="rounded-2xl bg-white/10 p-4 active:scale-95"
-              >
-                <ArrowLeft className="mx-auto h-6 w-6" />
-              </button>
-              <button
-                onClick={() => movePlayer(0, 1)}
-                className="rounded-2xl bg-white/10 p-4 active:scale-95"
-              >
-                <ArrowDown className="mx-auto h-6 w-6" />
-              </button>
-              <button
-                onClick={() => movePlayer(1, 0)}
-                className="rounded-2xl bg-white/10 p-4 active:scale-95"
-              >
-                <ArrowRight className="mx-auto h-6 w-6" />
-              </button>
-            </div>
-            <p className="mt-3 text-center text-xs text-white/60">
-              También puede deslizar el dedo sobre el mapa para moverse.
-            </p>
-          </div>
-
-          {gameFinished && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="pointer-events-none absolute inset-0 overflow-hidden"
-            >
-              {Array.from({ length: 18 }).map((_, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ y: -40, x: `${(i * 7) % 100}%`, opacity: 0 }}
-                  animate={{ y: "110%", opacity: [0, 1, 1, 0] }}
-                  transition={{ duration: 4 + (i % 3), repeat: Infinity, delay: i * 0.12 }}
-                  className="absolute text-2xl"
-                >
-                  {i % 2 === 0 ? "💖" : "✨"}
-                </motion.div>
-              ))}
-            </motion.div>
-          )}
         </motion.div>
       </div>
     </div>
