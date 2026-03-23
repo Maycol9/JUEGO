@@ -10,6 +10,9 @@ import {
   RotateCcw,
   Sparkles,
   Star,
+  Volume2,
+  VolumeX,
+  Gem,
 } from "lucide-react";
 
 const MAX_TILE_SIZE = 56;
@@ -109,6 +112,10 @@ function cellKey(x, y) {
   return `${x}-${y}`;
 }
 
+function noteFrequency(note) {
+  return 440 * 2 ** ((note - 69) / 12);
+}
+
 export default function App() {
   const [started, setStarted] = useState(false);
   const [levelIndex, setLevelIndex] = useState(0);
@@ -119,12 +126,19 @@ export default function App() {
   const [score, setScore] = useState(0);
   const [overlay, setOverlay] = useState(null);
   const [gameFinished, setGameFinished] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [audioReady, setAudioReady] = useState(false);
   const touchStartRef = useRef(null);
   const boardWrapperRef = useRef(null);
   const [boardViewportWidth, setBoardViewportWidth] = useState(0);
+  const audioContextRef = useRef(null);
+  const masterGainRef = useRef(null);
+  const musicIntervalRef = useRef(null);
+  const musicStepRef = useRef(0);
 
   const currentLevel = LEVELS[levelIndex];
   const parsed = useMemo(() => parseLevel(currentLevel), [currentLevel]);
+  const totalLevelGems = parsed.gems.length;
 
   useEffect(() => {
     const updateBoardWidth = () => {
@@ -149,6 +163,121 @@ export default function App() {
     return () => window.removeEventListener("resize", updateBoardWidth);
   }, []);
 
+  const ensureAudio = useCallback(async () => {
+    if (typeof window === "undefined") return false;
+
+    if (!audioContextRef.current) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return false;
+      const ctx = new AudioCtx();
+      const gain = ctx.createGain();
+      gain.gain.value = soundEnabled ? 0.12 : 0;
+      gain.connect(ctx.destination);
+      audioContextRef.current = ctx;
+      masterGainRef.current = gain;
+    }
+
+    if (audioContextRef.current.state === "suspended") {
+      await audioContextRef.current.resume();
+    }
+
+    setAudioReady(true);
+    return true;
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    if (masterGainRef.current) {
+      masterGainRef.current.gain.setTargetAtTime(
+        soundEnabled ? 0.12 : 0,
+        audioContextRef.current?.currentTime || 0,
+        0.08
+      );
+    }
+  }, [soundEnabled]);
+
+  const playTone = useCallback((frequency, duration = 0.18, type = "sine", volume = 0.2, delay = 0) => {
+    const ctx = audioContextRef.current;
+    const master = masterGainRef.current;
+    if (!ctx || !master || !soundEnabled) return;
+
+    const now = ctx.currentTime + delay;
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, now);
+    gainNode.gain.setValueAtTime(0.0001, now);
+    gainNode.gain.exponentialRampToValueAtTime(volume, now + 0.02);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(master);
+    oscillator.start(now);
+    oscillator.stop(now + duration + 0.02);
+  }, [soundEnabled]);
+
+  const playMoveSound = useCallback(() => {
+    playTone(noteFrequency(76), 0.06, "triangle", 0.05);
+  }, [playTone]);
+
+  const playGemSound = useCallback(() => {
+    playTone(noteFrequency(76), 0.08, "triangle", 0.09, 0);
+    playTone(noteFrequency(81), 0.12, "triangle", 0.08, 0.05);
+    playTone(noteFrequency(88), 0.16, "sine", 0.07, 0.1);
+  }, [playTone]);
+
+  const playLoseSound = useCallback(() => {
+    playTone(noteFrequency(57), 0.14, "sawtooth", 0.08, 0);
+    playTone(noteFrequency(52), 0.22, "sawtooth", 0.07, 0.1);
+  }, [playTone]);
+
+  const playWinSound = useCallback(() => {
+    [72, 76, 79, 84].forEach((note, index) => {
+      playTone(noteFrequency(note), 0.22, "triangle", 0.08, index * 0.08);
+    });
+  }, [playTone]);
+
+  const playButtonSound = useCallback(() => {
+    playTone(noteFrequency(74), 0.08, "sine", 0.05);
+  }, [playTone]);
+
+  useEffect(() => {
+    if (!started || !soundEnabled || !audioReady) {
+      if (musicIntervalRef.current) {
+        clearInterval(musicIntervalRef.current);
+        musicIntervalRef.current = null;
+      }
+      return;
+    }
+
+    const melody = [69, 72, 76, 72, 67, 71, 74, 71];
+    const bass = [45, 45, 48, 48, 43, 43, 40, 40];
+
+    const playAmbientStep = () => {
+      const index = musicStepRef.current % melody.length;
+      playTone(noteFrequency(melody[index]), 0.48, "sine", 0.025);
+      playTone(noteFrequency(bass[index]), 0.7, "triangle", 0.02, 0.02);
+      musicStepRef.current += 1;
+    };
+
+    playAmbientStep();
+    musicIntervalRef.current = setInterval(playAmbientStep, 650);
+
+    return () => {
+      if (musicIntervalRef.current) {
+        clearInterval(musicIntervalRef.current);
+        musicIntervalRef.current = null;
+      }
+    };
+  }, [started, soundEnabled, audioReady, playTone]);
+
+  useEffect(() => {
+    return () => {
+      if (musicIntervalRef.current) clearInterval(musicIntervalRef.current);
+      if (audioContextRef.current) audioContextRef.current.close();
+    };
+  }, []);
+
   const boardGap = useMemo(() => (boardViewportWidth > 0 && boardViewportWidth < 420 ? 6 : 8), [boardViewportWidth]);
 
   const tileSize = useMemo(() => {
@@ -161,6 +290,11 @@ export default function App() {
     () => parsed.width * tileSize + boardGap * (parsed.width - 1),
     [boardGap, parsed.width, tileSize]
   );
+
+  const progressPercent = useMemo(() => {
+    if (totalLevelGems === 0) return 100;
+    return Math.round((collected.length / totalLevelGems) * 100);
+  }, [collected.length, totalLevelGems]);
 
   const resetLevelState = useCallback(
     (keepLives = true) => {
@@ -189,6 +323,7 @@ export default function App() {
   const remainingGems = parsed.gems.filter((gem) => !collectedKeys.has(gem.id));
 
   const loseLife = useCallback(() => {
+    playLoseSound();
     setLives((prev) => {
       if (prev <= 1) {
         setOverlay({
@@ -201,7 +336,7 @@ export default function App() {
       return prev - 1;
     });
     setPlayer(parsed.start);
-  }, [parsed.start]);
+  }, [parsed.start, playLoseSound]);
 
   const isWall = useCallback(
     (x, y) => {
@@ -212,8 +347,9 @@ export default function App() {
   );
 
   const movePlayer = useCallback(
-    (dx, dy) => {
+    async (dx, dy) => {
       if (!started || overlay || gameFinished) return;
+      await ensureAudio();
 
       const nextX = player.x + dx;
       const nextY = player.y + dy;
@@ -225,8 +361,11 @@ export default function App() {
         return;
       }
 
+      playMoveSound();
+
       const gem = remainingGems.find((item) => item.x === nextX && item.y === nextY);
       if (gem) {
+        playGemSound();
         setCollected((prev) => [...prev, gem.id]);
         setScore((prev) => prev + 100);
       }
@@ -234,6 +373,7 @@ export default function App() {
       const reachedExit = nextX === parsed.exit.x && nextY === parsed.exit.y;
       if (reachedExit && remainingGems.length === (gem ? 1 : 0)) {
         setPlayer({ x: nextX, y: nextY });
+        playWinSound();
         const isLast = levelIndex === LEVELS.length - 1;
 
         if (isLast) {
@@ -259,15 +399,19 @@ export default function App() {
       started,
       overlay,
       gameFinished,
+      ensureAudio,
       player,
       isWall,
       enemyKeys,
       loseLife,
+      playMoveSound,
       remainingGems,
+      playGemSound,
       parsed.exit.x,
       parsed.exit.y,
       levelIndex,
       currentLevel.romanticText,
+      playWinSound,
     ]
   );
 
@@ -341,12 +485,16 @@ export default function App() {
     touchStartRef.current = null;
   };
 
-  const nextLevel = () => {
+  const nextLevel = async () => {
+    await ensureAudio();
+    playButtonSound();
     setOverlay(null);
     setLevelIndex((prev) => prev + 1);
   };
 
-  const restartGame = () => {
+  const restartGame = async () => {
+    await ensureAudio();
+    playButtonSound();
     setStarted(true);
     setLevelIndex(0);
     setLives(3);
@@ -361,13 +509,20 @@ export default function App() {
     }, 0);
   };
 
-  const startGame = () => {
+  const startGame = async () => {
+    await ensureAudio();
+    playButtonSound();
     setStarted(true);
     setLevelIndex(0);
     setLives(3);
     setScore(0);
     setGameFinished(false);
     resetLevelState(false);
+  };
+
+  const toggleSound = async () => {
+    await ensureAudio();
+    setSoundEnabled((prev) => !prev);
   };
 
   const renderCell = (x, y) => {
@@ -396,10 +551,7 @@ export default function App() {
           style={style}
           className="relative flex items-center justify-center border border-white/10 bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900 shadow-inner"
         >
-          <div
-            className="rounded-full bg-white/10"
-            style={{ width: wallDot, height: wallDot }}
-          />
+          <div className="rounded-full bg-white/10" style={{ width: wallDot, height: wallDot }} />
         </div>
       );
     }
@@ -419,11 +571,7 @@ export default function App() {
                 ? "border-yellow-400 bg-yellow-200/80"
                 : "border-white/40 bg-white/30"
             }`}
-            style={{
-              inset,
-              borderRadius: Math.max(12, radius - 4),
-              fontSize: pieceEmojiSize,
-            }}
+            style={{ inset, borderRadius: Math.max(12, radius - 4), fontSize: pieceEmojiSize }}
           >
             {remainingGems.length === 0 ? "🚪" : "🔒"}
           </motion.div>
@@ -431,9 +579,9 @@ export default function App() {
 
         {gem && (
           <motion.div
-            animate={{ y: [0, -4, 0], rotate: [0, 6, -6, 0] }}
+            animate={{ y: [0, -4, 0], rotate: [0, 6, -6, 0], scale: [1, 1.05, 1] }}
             transition={{ repeat: Infinity, duration: 1.8 }}
-            className="absolute"
+            className="absolute drop-shadow-lg"
             style={{ fontSize: pieceEmojiSize }}
           >
             💎
@@ -476,20 +624,49 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.18),_transparent_35%),linear-gradient(135deg,#2d1b69_0%,#111827_45%,#4c1d95_100%)] p-3 pb-[max(16px,env(safe-area-inset-bottom))] text-white sm:p-4 md:p-8">
-      <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[360px_1fr] lg:gap-6">
+    <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.22),_transparent_35%),linear-gradient(135deg,#2d1b69_0%,#111827_45%,#4c1d95_100%)] p-3 pb-[max(16px,env(safe-area-inset-bottom))] text-white sm:p-4 md:p-8">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -left-20 top-12 h-72 w-72 rounded-full bg-pink-500/12 blur-3xl" />
+        <div className="absolute bottom-0 right-0 h-96 w-96 rounded-full bg-fuchsia-500/10 blur-3xl" />
+        <div className="absolute left-1/2 top-1/4 h-80 w-80 -translate-x-1/2 rounded-full bg-cyan-300/5 blur-3xl" />
+      </div>
+
+      <div className="relative mx-auto grid max-w-7xl gap-4 lg:grid-cols-[360px_1fr] lg:gap-6">
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           className="order-1 relative overflow-hidden rounded-[28px] border border-white/10 bg-white/10 p-3 shadow-2xl backdrop-blur-xl sm:p-4 md:p-6 lg:order-2"
         >
-          <div className="mb-4 flex items-center justify-between gap-3 rounded-3xl border border-white/10 bg-black/20 p-3 sm:p-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/10 bg-black/20 p-3 sm:p-4">
             <div>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-fuchsia-200/80 sm:text-xs">Modo aventura</p>
-              <p className="mt-1 text-xl font-semibold sm:text-2xl">Lleva a la heroína hasta la salida</p>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-fuchsia-200/80 sm:text-xs">Juego de aventura</p>
+              <p className="mt-1 text-xl font-semibold sm:text-2xl">Lleva a la heroína hasta la salida mi amor</p>
             </div>
-            <div className="rounded-2xl bg-yellow-400/15 px-3 py-2 text-sm font-semibold text-yellow-200 sm:px-4">
-              Nivel {levelIndex + 1} / {LEVELS.length}
+            <div className="flex items-center gap-2">
+              <div className="rounded-2xl bg-yellow-400/15 px-3 py-2 text-sm font-semibold text-yellow-200 sm:px-4">
+                Nivel {levelIndex + 1} / {LEVELS.length}
+              </div>
+              <button
+                onClick={toggleSound}
+                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/10 transition hover:bg-white/15"
+                aria-label={soundEnabled ? "Silenciar sonido" : "Activar sonido"}
+              >
+                {soundEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-4 rounded-3xl border border-white/10 bg-black/20 p-3">
+            <div className="mb-2 flex items-center justify-between text-xs text-white/70 sm:text-sm">
+              <span className="flex items-center gap-2"><Gem className="h-4 w-4 text-cyan-200" /> Progreso del nivel</span>
+              <span>{progressPercent}%</span>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-white/10">
+              <motion.div
+                className="h-full rounded-full bg-gradient-to-r from-cyan-300 via-pink-400 to-fuchsia-500"
+                animate={{ width: `${progressPercent}%` }}
+                transition={{ type: "spring", stiffness: 120, damping: 20 }}
+              />
             </div>
           </div>
 
@@ -519,35 +696,21 @@ export default function App() {
             <p className="mb-3 text-center text-sm font-medium text-white/80">Controles táctiles</p>
             <div className="mx-auto grid w-full max-w-[220px] grid-cols-3 gap-3">
               <div />
-              <button
-                onClick={() => movePlayer(0, -1)}
-                className="rounded-2xl bg-white/10 p-4 active:scale-95"
-              >
+              <button onClick={() => movePlayer(0, -1)} className="rounded-2xl bg-white/10 p-4 active:scale-95">
                 <ArrowUp className="mx-auto h-6 w-6" />
               </button>
               <div />
-              <button
-                onClick={() => movePlayer(-1, 0)}
-                className="rounded-2xl bg-white/10 p-4 active:scale-95"
-              >
+              <button onClick={() => movePlayer(-1, 0)} className="rounded-2xl bg-white/10 p-4 active:scale-95">
                 <ArrowLeft className="mx-auto h-6 w-6" />
               </button>
-              <button
-                onClick={() => movePlayer(0, 1)}
-                className="rounded-2xl bg-white/10 p-4 active:scale-95"
-              >
+              <button onClick={() => movePlayer(0, 1)} className="rounded-2xl bg-white/10 p-4 active:scale-95">
                 <ArrowDown className="mx-auto h-6 w-6" />
               </button>
-              <button
-                onClick={() => movePlayer(1, 0)}
-                className="rounded-2xl bg-white/10 p-4 active:scale-95"
-              >
+              <button onClick={() => movePlayer(1, 0)} className="rounded-2xl bg-white/10 p-4 active:scale-95">
                 <ArrowRight className="mx-auto h-6 w-6" />
               </button>
             </div>
-            <p className="mt-3 text-center text-xs text-white/60">
-              También puede deslizar el dedo sobre el tablero para moverse.
-            </p>
+            <p className="mt-3 text-center text-xs text-white/60">También puede deslizar el dedo sobre el tablero para moverse.</p>
           </div>
 
           <AnimatePresence>
@@ -559,16 +722,12 @@ export default function App() {
                 className="absolute inset-0 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-md sm:p-6"
               >
                 <div className="max-w-xl rounded-[32px] border border-white/10 bg-white/10 p-6 text-center shadow-2xl backdrop-blur-xl sm:p-8">
-                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-pink-500/20 text-3xl sm:h-20 sm:w-20 sm:text-4xl">
-                    🌸
-                  </div>
-                  <h2 className="text-2xl font-bold sm:text-3xl">Un juego hecho para ella</h2>
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-pink-500/20 text-3xl sm:h-20 sm:w-20 sm:text-4xl">🌸</div>
+                  <h2 className="text-2xl font-bold sm:text-3xl">Un juego hecho para ti amor</h2>
                   <p className="mt-4 text-sm leading-7 text-white/75 sm:text-base">
-                    Explora, recoge diamantes y supera los niveles. Cada victoria mostrará un mensaje especial:
+                    
                   </p>
-                  <p className="mt-4 rounded-2xl bg-pink-500/15 px-4 py-3 text-base font-semibold text-pink-100 sm:text-lg">
-                    {WIN_MESSAGE}
-                  </p>
+                  <p className="mt-4 rounded-2xl bg-pink-500/15 px-4 py-3 text-base font-semibold text-pink-100 sm:text-lg">{WIN_MESSAGE}</p>
                   <button
                     onClick={startGame}
                     className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
@@ -609,19 +768,13 @@ export default function App() {
 
                   <div className="mt-6 flex flex-wrap justify-center gap-3">
                     {overlay.type === "win" && (
-                      <button
-                        onClick={nextLevel}
-                        className="rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
-                      >
+                      <button onClick={nextLevel} className="rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]">
                         Siguiente nivel
                       </button>
                     )}
 
                     {(overlay.type === "final" || overlay.type === "gameover") && (
-                      <button
-                        onClick={restartGame}
-                        className="rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]"
-                      >
+                      <button onClick={restartGame} className="rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-3 font-semibold shadow-lg transition hover:scale-[1.02]">
                         Volver a jugar
                       </button>
                     )}
@@ -632,11 +785,7 @@ export default function App() {
           </AnimatePresence>
 
           {gameFinished && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="pointer-events-none absolute inset-0 overflow-hidden"
-            >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="pointer-events-none absolute inset-0 overflow-hidden">
               {Array.from({ length: 18 }).map((_, i) => (
                 <motion.div
                   key={i}
@@ -663,7 +812,7 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-2xl font-bold md:text-3xl">Aventura Romántica</h1>
-              <p className="text-sm text-white/70">Este juego es echo para ti mi amor .</p>
+              <p className="text-sm text-white/70"> Este juego es echo para ti mi amor.</p>
             </div>
           </div>
 
@@ -671,7 +820,7 @@ export default function App() {
             <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
               <p className="text-xs uppercase tracking-[0.2em] text-pink-200/80">Nivel actual</p>
               <h2 className="mt-2 text-xl font-semibold">{currentLevel.name}</h2>
-              <p className="mt-2 text-sm leading-6 text-white/75">Recoge todos los diamantes y luego llega a la puerta.</p>
+              <p className="mt-2 text-sm leading-6 text-white/75">Recoge todos los diamantes, evita los enemigos y llega a la puerta final.</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -681,10 +830,7 @@ export default function App() {
                 </div>
                 <div className="flex gap-2">
                   {[0, 1, 2].map((i) => (
-                    <Heart
-                      key={i}
-                      className={`h-6 w-6 ${i < lives ? "fill-pink-400 text-pink-300" : "text-white/15"}`}
-                    />
+                    <Heart key={i} className={`h-6 w-6 ${i < lives ? "fill-pink-400 text-pink-300" : "text-white/15"}`} />
                   ))}
                 </div>
               </div>
@@ -705,23 +851,22 @@ export default function App() {
               </div>
             </div>
 
+            <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+              <p className="text-sm font-medium text-white/80">Audio del juego</p>
+              <p className="mt-2 text-sm leading-6 text-white/65">
+                
+              </p>
+            </div>
+
             <div className="hidden rounded-3xl border border-white/10 bg-black/20 p-4 md:block">
               <p className="mb-3 text-sm font-medium text-white/80">Controles</p>
               <div className="grid grid-cols-3 gap-2 text-center text-xs">
                 <div />
-                <div className="rounded-2xl bg-white/10 p-3">
-                  <ArrowUp className="mx-auto h-5 w-5" />
-                </div>
+                <div className="rounded-2xl bg-white/10 p-3"><ArrowUp className="mx-auto h-5 w-5" /></div>
                 <div />
-                <div className="rounded-2xl bg-white/10 p-3">
-                  <ArrowLeft className="mx-auto h-5 w-5" />
-                </div>
-                <div className="rounded-2xl bg-white/10 p-3">
-                  <ArrowDown className="mx-auto h-5 w-5" />
-                </div>
-                <div className="rounded-2xl bg-white/10 p-3">
-                  <ArrowRight className="mx-auto h-5 w-5" />
-                </div>
+                <div className="rounded-2xl bg-white/10 p-3"><ArrowLeft className="mx-auto h-5 w-5" /></div>
+                <div className="rounded-2xl bg-white/10 p-3"><ArrowDown className="mx-auto h-5 w-5" /></div>
+                <div className="rounded-2xl bg-white/10 p-3"><ArrowRight className="mx-auto h-5 w-5" /></div>
               </div>
               <p className="mt-3 text-sm text-white/60">También puedes usar W, A, S y D.</p>
             </div>
